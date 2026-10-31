@@ -164,19 +164,50 @@ The frontend includes a real-time polling badge in the header that displays:
 
 ---
 
+## 🔑 Phase 2: Gemini API Configuration
+
+To enable AI-powered claim extraction from project documents:
+
+1. Obtain a free Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Open `backend/.env` (or create it from `backend/.env.example`) and add your key:
+   ```env
+   PORT=5000
+   NODE_ENV=development
+   CLIENT_URL=http://localhost:5173
+   GEMINI_API_KEY=your_actual_gemini_api_key_here
+   GEMINI_MODEL=gemini-2.5-flash
+   ```
+3. The server will hot-reload automatically. No frontend restart is needed!
+
+---
+
+## 📄 Phase 2: Document Claim Extraction Endpoint
+
+- **Endpoint:** `POST /api/claims/extract`
+- **Payload:** `multipart/form-data` with field `document` containing a `.md`, `.txt`, `.pdf`, or `.pptx` file (max 10 MB).
+- **Features:**
+  - Extracts text from slides (PPTX) preserving `[Slide N]` markers.
+  - Extracts text from pages (PDF) preserving `[Page N]` markers.
+  - Passes untrusted document text to Gemini with strong prompt injection guardrails.
+  - Returns structured claims validated against schema:
+    `id, title, originalText, category, source, proposedChecks, status (NOT_TESTED)`.
+
+---
+
 ## 🗺️ Roadmap & Phases
 
 - [x] **Phase 1 (Completed):**
   - Full-stack repository structure (React + Vite + Tailwind frontend, Express + TypeScript backend).
   - Health check endpoint and frontend API communication with Vite reverse proxy.
   - Dark-themed responsive landing page with teal/cyan branding.
-  - Modular dashboard placeholder and clean setup.
-- [ ] **Phase 2:**
-  - Ingest pitch decks / PDF / PPT / README files.
-  - Connect Gemini API to extract atomic claims and hypotheses.
+- [x] **Phase 2 (Completed):**
+  - Multi-format document parser (`.md`, `.txt`, `.pdf`, `.pptx`).
+  - Slide and page number citation preservation.
+  - Google Gemini AI claim extraction service with injection defense.
+  - Drag-and-drop document upload area and interactive Claim cards with select/deselect.
 - [ ] **Phase 3:**
   - GitHub REST API / Octokit integration to clone and parse target repositories.
-  - AST symbol extraction and static analysis.
+  - AST symbol extraction, dependency scanning, and static code analysis.
 - [ ] **Phase 4:**
   - Automated Playwright browser tests and API health probes.
 - [ ] **Phase 5:**

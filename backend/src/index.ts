@@ -1,14 +1,13 @@
+import './config/env.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { healthRouter } from './routes/health.js';
-
-// Load environment variables from .env
-dotenv.config();
+import { claimsRouter } from './routes/claims.js';
+import { ENV } from './config/env.js';
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5000;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const PORT = ENV.PORT;
+const CLIENT_URL = ENV.CLIENT_URL;
 
 // Middleware
 app.use(
@@ -38,6 +37,7 @@ app.get('/', (_req: Request, res: Response) => {
 
 // Routes
 app.use('/api/health', healthRouter);
+app.use('/api/claims', claimsRouter);
 
 // Fallback 404 handler for undefined API routes
 app.use('/api/*', (_req: Request, res: Response) => {

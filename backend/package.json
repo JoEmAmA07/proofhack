@@ -2,25 +2,32 @@
   "name": "proofstack-backend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Backend API service for ProofStack project verification",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/parser.test.mjs && node tests/resilience.test.mjs"
   },
   "dependencies": {
+    "@google/genai": "^2.32.0",
+    "adm-zip": "^0.6.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "multer": "^2.5.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/multer": "^2.3.0",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }
-
