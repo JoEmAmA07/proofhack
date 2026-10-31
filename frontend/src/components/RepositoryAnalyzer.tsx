@@ -263,13 +263,63 @@ export const RepositoryAnalyzer: React.FC<Props> = ({
                                 Runtime: <span className="text-amber-300">
                                     {match.runtimeStatus}
                                 </span>
-                                {' '}· Heuristic evidence score: {match.confidenceScore}/100
+
                             </p>
 
                             <p className="text-[11px] text-slate-500">
                                 Code matches are indicators, not proof that a feature works.
-                                The score is heuristic, not a verified probability.
+
                             </p>
+
+                            {match.implementationTrail &&
+                                match.implementationTrail.steps.length > 0 && (
+                                    <div className="rounded-xl border border-cyan-500/30 bg-slate-950/60 p-4 space-y-4">
+                                        <div>
+                                            <h4 className="text-sm font-semibold text-cyan-300">
+                                                Implementation Trail
+                                            </h4>
+                                            <p className="mt-1 text-xs text-slate-400">
+                                                {match.implementationTrail.description}
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            {match.implementationTrail.steps.map((step, index) => (
+                                                <div
+                                                    key={`${step.filePath}-${step.line}-${index}`}
+                                                    className="rounded-lg border border-slate-700 bg-slate-900/70 p-3"
+                                                >
+                                                    <div className="flex items-center gap-2 text-xs">
+                                                        <span className="rounded bg-cyan-500/10 px-2 py-1 text-cyan-300">
+                                                            {step.caller}
+                                                        </span>
+
+                                                        <span className="text-slate-500">calls</span>
+
+                                                        <span className="rounded bg-emerald-500/10 px-2 py-1 text-emerald-300">
+                                                            {step.callee}
+                                                        </span>
+                                                    </div>
+
+                                                    <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                                                        <span className="break-all text-slate-400">
+                                                            {step.filePath}:{step.line}
+                                                        </span>
+
+                                                        <a
+                                                            href={step.permalink}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="shrink-0 text-cyan-400 hover:text-cyan-300"
+                                                        >
+                                                            View on GitHub ↗
+                                                        </a>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
 
                             {match.evidenceSnippets.length > 0 && (
                                 <div className="space-y-3">

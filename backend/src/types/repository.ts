@@ -64,6 +64,19 @@ export type CodeEvidenceStatus =
   | 'NO_EVIDENCE_FOUND'
   | 'INCONCLUSIVE';
 
+export interface ImplementationTrailStep {
+  caller: string;
+  callee: string;
+  filePath: string;
+  line: number;
+  permalink: string;
+}
+
+export interface ImplementationTrail {
+  steps: ImplementationTrailStep[];
+  description: string;
+}
+
 export interface ClaimEvidenceMatch {
   claimId: string;
   claimTitle: string;
@@ -74,6 +87,9 @@ export interface ClaimEvidenceMatch {
   assessmentReason: string;
   matchedDependencies: ManifestDependency[];
   evidenceSnippets: CodeEvidenceSnippet[];
+
+  implementationTrail?: ImplementationTrail;
+
   confidenceScore: number; // 0 - 100
 }
 export interface FunctionCall {

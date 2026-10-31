@@ -121,6 +121,40 @@ export class ClaimMatcher {
       // Check static function-call relationships.
       // A matching call is supporting evidence, NOT proof of working behavior.
       for (const call of file.calls ?? []) {
+
+        const ignoredMethods = new Set([
+          'map',
+          'filter',
+          'forEach',
+          'find',
+          'findIndex',
+          'some',
+          'every',
+          'reduce',
+          'sort',
+          'includes',
+          'trim',
+          'toLowerCase',
+          'toUpperCase',
+          'split',
+          'join',
+          'push',
+          'pop',
+          'slice',
+          'splice',
+        ]);
+
+        const calleeMethod = call.callee
+          .split('(')[0]
+          .split('.')
+          .pop()
+          ?.trim();
+
+        if (calleeMethod && ignoredMethods.has(calleeMethod)) {
+          continue;
+        }
+
+
         const callerMatches = claimKeywords.some((kw) =>
           this.matchesIdentifier(call.caller, kw)
         );
@@ -129,9 +163,12 @@ export class ClaimMatcher {
           this.matchesIdentifier(call.callee, kw)
         );
 
-        if (!callerMatches && !calleeMatches) {
+        // Keep calls where both sides relate to the claim.
+        // This reduces noisy matches caused by generic keywords.
+        if (!callerMatches || !calleeMatches) {
           continue;
         }
+
 
         snippets.push({
           filePath: file.path,
@@ -181,6 +218,57 @@ export class ClaimMatcher {
 
     // 3. Determine Code Evidence Status
 
+    const relevantCalls = uniqueSnippets.filter(
+      (snippet) => snippet.kind === 'function_call'
+    );
+
+    const callGroups = new Map<string, typeof relevantCalls>();
+
+    for (const snippet of relevantCalls) {
+      const relationship = snippet.relevanceReason.match(
+        /Static call relationship: "(.+?)" calls "(.+?)"/
+      );
+
+      if (!relationship) continue;
+
+      const caller = relationship[1];
+      const groupKey = `${snippet.filePath}::${caller}`;
+
+      const group = callGroups.get(groupKey) ?? [];
+      group.push(snippet);
+      callGroups.set(groupKey, group);
+    }
+
+    const bestCallGroup = [...callGroups.values()].sort(
+      (a, b) => b.length - a.length
+    )[0] ?? [];
+
+    const trailSteps = bestCallGroup
+      .slice(0, 6)
+      .map((snippet) => {
+        const relationship = snippet.relevanceReason.match(
+          /Static call relationship: "(.+?)" calls "(.+?)"/
+        );
+
+        return {
+          caller: relationship?.[1] ?? 'Unknown',
+          callee: relationship?.[2] ?? 'Unknown',
+          filePath: snippet.filePath,
+          line: snippet.lineStart,
+          permalink: snippet.permalink,
+        };
+      });
+
+    const implementationTrail =
+      trailSteps.length > 0
+        ? {
+          steps: trailSteps,
+          description:
+            'Related static calls grouped by their caller. ' +
+            'This is not a verified execution sequence.',
+        }
+        : undefined;
+
     // 3. Conservative evidence assessment.
     // Static keyword and symbol matches identify candidates,
     // NOT verified implementations or working features.
@@ -196,18 +284,32 @@ export class ClaimMatcher {
         s.kind === 'class'
     );
 
+    const callSnippets = uniqueSnippets.filter(
+      (s) => s.kind === 'function_call'
+    );
+
     const importSnippets = uniqueSnippets.filter(
       (s) => s.kind === 'import'
     );
 
     if (candidateSnippets.length > 0) {
       status = 'LIMITED_EVIDENCE';
+
       assessmentReason =
-        `Found ${candidateSnippets.length} candidate function/route ` +
-        `symbol match(es). Their names or paths may relate to the claim, ` +
-        `but implementation behavior has not been established. ` +
-        `Runtime testing has not been performed.` +
+        `Found ${candidateSnippets.length} candidate function/route symbol match(es)` +
+        ` and ${callSnippets.length} related static function-call relationship(s). ` +
+        `These indicate potentially relevant code structure, but do not establish ` +
+        `that the claimed behavior works. Runtime testing has not been performed.` +
         (isPartialScan ? ' Repository coverage is partial.' : '');
+
+    } else if (callSnippets.length > 0) {
+      status = 'LIMITED_EVIDENCE';
+      assessmentReason =
+        `Found ${callSnippets.length} potentially relevant static function-call ` +
+        `relationship(s), but no matching function or route definitions. ` +
+        `Execution and claimed behavior remain unverified.` +
+        (isPartialScan ? ' Repository coverage is partial.' : '');
+
     } else if (importSnippets.length > 0 || matchedDeps.length > 0) {
       status = 'LIMITED_EVIDENCE';
       assessmentReason =
@@ -234,13 +336,14 @@ export class ClaimMatcher {
       codeEvidenceStatus: status,
       assessmentReason,
       matchedDependencies: matchedDeps,
+      implementationTrail,
       evidenceSnippets: [...uniqueSnippets]
         .sort((a, b) => {
           const priority: Record<string, number> = {
+            function_call: 7,
             route: 6,
             function: 5,
             class: 5,
-            function_call: 4,
             text_match: 2,
             import: 1,
             manifest: 0,
@@ -257,11 +360,14 @@ export class ClaimMatcher {
    * Extracts searchable domain keywords from a claim.
    */
   private static extractKeywords(claim: Claim): string[] {
+
     const rawTokens = [
       claim.title,
+      claim.originalText,
       claim.category,
       ...(claim.proposedChecks || []),
     ].join(' ').toLowerCase();
+
 
     // Map common domain terms to related tech identifiers
     const keywords = new Set<string>();

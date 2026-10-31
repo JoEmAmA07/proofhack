@@ -51,6 +51,19 @@ export interface EvidenceSnippet {
     kind: string;
 }
 
+export interface ImplementationTrailStep {
+    caller: string;
+    callee: string;
+    filePath: string;
+    line: number;
+    permalink: string;
+}
+
+export interface ImplementationTrail {
+    steps: ImplementationTrailStep[];
+    description: string;
+}
+
 export interface ClaimEvidenceMatch {
     claimId: string;
     claimTitle?: string;
@@ -61,6 +74,7 @@ export interface ClaimEvidenceMatch {
     assessmentReason: string;
     matchedDependencies: Dependency[];
     evidenceSnippets: EvidenceSnippet[];
+    implementationTrail?: ImplementationTrail;
     confidenceScore: number;
 }
 
