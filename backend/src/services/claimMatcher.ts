@@ -93,7 +93,7 @@ export class ClaimMatcher {
               lineEnd: fn.lineEnd,
               code: this.getSnippetLines(file.content, fn.lineStart, Math.min(fn.lineEnd, fn.lineStart + 6)),
               permalink: `https://github.com/${metadata.owner}/${metadata.repo}/blob/${metadata.headCommitSha}/${file.path}#L${fn.lineStart}-L${fn.lineEnd}`,
-              relevanceReason: `Function "${fn.name}()" implements logic matching claim keyword "${kw}".`,
+              relevanceReason: `Candidate function "${fn.name}()" has a name matching "${kw}". Its behavior has not been verified.`,
               kind: 'function',
             });
           }
@@ -111,11 +111,39 @@ export class ClaimMatcher {
               lineEnd: route.lineEnd,
               code: this.getSnippetLines(file.content, route.lineStart, route.lineEnd),
               permalink: `https://github.com/${metadata.owner}/${metadata.repo}/blob/${metadata.headCommitSha}/${file.path}#L${route.lineStart}-L${route.lineEnd}`,
-              relevanceReason: `Endpoint "${route.method} ${route.path}" provides API interface matching claim.`,
+              relevanceReason: `Candidate route "${route.method} ${route.path}" matches claim terminology. Its behavior has not been verified.`,
               kind: 'route',
             });
           }
         }
+      }
+
+      // Check static function-call relationships.
+      // A matching call is supporting evidence, NOT proof of working behavior.
+      for (const call of file.calls ?? []) {
+        const callerMatches = claimKeywords.some((kw) =>
+          this.matchesIdentifier(call.caller, kw)
+        );
+
+        const calleeMatches = claimKeywords.some((kw) =>
+          this.matchesIdentifier(call.callee, kw)
+        );
+
+        if (!callerMatches && !calleeMatches) {
+          continue;
+        }
+
+        snippets.push({
+          filePath: file.path,
+          lineStart: call.line,
+          lineEnd: call.line,
+          code: this.getSnippetLines(file.content, call.line, call.line),
+          permalink: `https://github.com/${metadata.owner}/${metadata.repo}/blob/${metadata.headCommitSha}/${file.path}#L${call.line}`,
+          relevanceReason:
+            `Static call relationship: "${call.caller}" calls "${call.callee}". ` +
+            `This may relate to the claim, but execution and behavior have not been verified.`,
+          kind: 'function_call',
+        });
       }
 
       // Check file path and keywords in content if no snippet found for this file yet
@@ -138,36 +166,63 @@ export class ClaimMatcher {
     }
 
     // Deduplicate snippets by filePath and lineStart
+
     const uniqueSnippets = snippets.filter(
       (snip, idx, self) =>
-        idx === self.findIndex((s) => s.filePath === snip.filePath && s.lineStart === snip.lineStart)
+        idx === self.findIndex(
+          (s) =>
+            s.filePath === snip.filePath &&
+            s.lineStart === snip.lineStart &&
+            s.kind === snip.kind &&
+            s.relevanceReason === snip.relevanceReason
+        )
     );
+
 
     // 3. Determine Code Evidence Status
-    let status: CodeEvidenceStatus = 'NO_EVIDENCE_FOUND';
-    let assessmentReason = '';
-    let confidenceScore = 0;
 
-    const codeImplementationSnippets = uniqueSnippets.filter(
-      (s) => s.kind === 'function' || s.kind === 'route' || s.kind === 'import' || s.kind === 'class'
+    // 3. Conservative evidence assessment.
+    // Static keyword and symbol matches identify candidates,
+    // NOT verified implementations or working features.
+
+    let status: CodeEvidenceStatus = 'INCONCLUSIVE';
+    let assessmentReason = '';
+    const confidenceScore = 0;
+
+    const candidateSnippets = uniqueSnippets.filter(
+      (s) =>
+        s.kind === 'function' ||
+        s.kind === 'route' ||
+        s.kind === 'class'
     );
 
-    if (codeImplementationSnippets.length > 0) {
-      status = 'EVIDENCE_FOUND';
-      confidenceScore = Math.min(95, 60 + codeImplementationSnippets.length * 10);
-      assessmentReason = `Identified ${codeImplementationSnippets.length} relevant code implementation snippet(s) across source files (routes, functions, or imports).`;
-    } else if (matchedDeps.length > 0) {
+    const importSnippets = uniqueSnippets.filter(
+      (s) => s.kind === 'import'
+    );
+
+    if (candidateSnippets.length > 0) {
       status = 'LIMITED_EVIDENCE';
-      confidenceScore = 35;
-      assessmentReason = `Package dependency "${matchedDeps[0].name}" is declared in ${matchedDeps[0].manifestFile}, but no active function or route implementation was identified in scanned source files.`;
-    } else if (isPartialScan) {
-      status = 'INCONCLUSIVE';
-      confidenceScore = 15;
-      assessmentReason = 'Repository scan was partial due to size limits; insufficient source files scanned to confirm implementation.';
+      assessmentReason =
+        `Found ${candidateSnippets.length} candidate function/route ` +
+        `symbol match(es). Their names or paths may relate to the claim, ` +
+        `but implementation behavior has not been established. ` +
+        `Runtime testing has not been performed.` +
+        (isPartialScan ? ' Repository coverage is partial.' : '');
+    } else if (importSnippets.length > 0 || matchedDeps.length > 0) {
+      status = 'LIMITED_EVIDENCE';
+      assessmentReason =
+        'Related imports or declared dependencies were detected. ' +
+        'These do not establish that the claimed feature is implemented. ' +
+        'No relevant implementation behavior was verified.' +
+        (isPartialScan ? ' Repository coverage is partial.' : '');
     } else {
-      status = 'NO_EVIDENCE_FOUND';
-      confidenceScore = 0;
-      assessmentReason = 'No matching packages, functions, classes, or endpoints were found in the analyzed codebase.';
+      status = 'INCONCLUSIVE';
+      assessmentReason =
+        'Insufficient evidence to assess this claim. ' +
+        'No verified implementation behavior was identified. ' +
+        (isPartialScan
+          ? 'Only part of the repository was analyzed.'
+          : 'No matching candidates were identified in the scanned files.');
     }
 
     return {
@@ -179,7 +234,21 @@ export class ClaimMatcher {
       codeEvidenceStatus: status,
       assessmentReason,
       matchedDependencies: matchedDeps,
-      evidenceSnippets: uniqueSnippets.slice(0, 5), // Top 5 snippets per claim
+      evidenceSnippets: [...uniqueSnippets]
+        .sort((a, b) => {
+          const priority: Record<string, number> = {
+            route: 6,
+            function: 5,
+            class: 5,
+            function_call: 4,
+            text_match: 2,
+            import: 1,
+            manifest: 0,
+          };
+
+          return (priority[b.kind] ?? 0) - (priority[a.kind] ?? 0);
+        })
+        .slice(0, 5),
       confidenceScore,
     };
   }
@@ -196,6 +265,12 @@ export class ClaimMatcher {
 
     // Map common domain terms to related tech identifiers
     const keywords = new Set<string>();
+    const claimWords = new Set(
+      rawTokens
+        .replace(/[^a-z0-9_-]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+    );
 
     const DOMAIN_MAP: Record<string, string[]> = {
       jwt: ['jwt', 'jsonwebtoken', 'bearer', 'token'],
@@ -219,7 +294,7 @@ export class ClaimMatcher {
     };
 
     for (const [key, aliases] of Object.entries(DOMAIN_MAP)) {
-      if (rawTokens.includes(key)) {
+      if (claimWords.has(key)) {
         aliases.forEach((a) => keywords.add(a));
       }
     }

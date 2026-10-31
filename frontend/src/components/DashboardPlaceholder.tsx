@@ -14,7 +14,12 @@ import {
   Key,
 } from 'lucide-react';
 import { HealthResponse } from '../api/health';
-import { ExtractionResult, uploadAndExtractClaims } from '../api/claims';
+import {
+  ExtractionResult,
+  DocumentPreview,
+  uploadAndExtractClaims,
+  uploadAndPreviewDocument,
+} from '../api/claims';
 import { DocumentUploadZone } from './DocumentUploadZone';
 import { ClaimCard } from './ClaimCard';
 import { RepositoryAnalyzer } from './RepositoryAnalyzer';
@@ -36,6 +41,16 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
   const [extractionError, setExtractionError] = useState<string | null>(null);
+  const [documentPreview, setDocumentPreview] =
+    useState<DocumentPreview | null>(null);
+
+  const [fallbackNotice, setFallbackNotice] =
+    useState<string | null>(null);
+
+  const [manualClaimTitle, setManualClaimTitle] = useState('');
+  const [manualClaimText, setManualClaimText] = useState('');
+  const [manualClaimSource, setManualClaimSource] = useState('');
+  const [manualClaimError, setManualClaimError] = useState('');
 
   // Selected Claims for future verification
   const [selectedClaimIds, setSelectedClaimIds] = useState<Set<string>>(new Set());
@@ -45,23 +60,96 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
 
   // Trigger claim extraction
+
   const handleExtractClaims = async (file: File) => {
     setIsExtracting(true);
     setExtractionError(null);
+    setFallbackNotice(null);
+    setDocumentPreview(null);
+    setExtractionResult(null);
+    setSelectedClaimIds(new Set());
 
-    const res = await uploadAndExtractClaims(file);
+    try {
+      // First try AI-powered claim extraction.
+      const aiResult = await uploadAndExtractClaims(file);
 
-    setIsExtracting(false);
+      if (aiResult.success && aiResult.data) {
+        setExtractionResult(aiResult.data);
+        setSelectedClaimIds(
+          new Set(aiResult.data.claims.map((claim) => claim.id))
+        );
+        return;
+      }
 
-    if (!res.success || !res.data) {
-      setExtractionError(res.error || 'Failed to extract claims from document.');
+      // If Gemini fails, still read the actual uploaded document.
+      const previewResult = await uploadAndPreviewDocument(file);
+
+      if (previewResult.success && previewResult.data) {
+        setDocumentPreview(previewResult.data);
+        setFallbackNotice(
+          'AI claim extraction is unavailable. Your document was read successfully. Review the text below to create claims manually.'
+        );
+        return;
+      }
+
+      setExtractionError(
+        previewResult.error ||
+        aiResult.error ||
+        'Unable to process the uploaded document.'
+      );
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+
+  const handleAddManualClaim = () => {
+    const title = manualClaimTitle.trim();
+    const originalText = manualClaimText.trim();
+    const source = manualClaimSource.trim();
+
+    if (!documentPreview) {
+      setManualClaimError('Upload and preview a document first.');
       return;
     }
 
-    setExtractionResult(res.data);
-    // By default select all extracted claims
-    const allIds = new Set(res.data.claims.map((c) => c.id));
-    setSelectedClaimIds(allIds);
+    if (!title || !originalText) {
+      setManualClaimError('Enter both a claim title and description.');
+      return;
+    }
+
+    const id = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const newClaim = {
+      id,
+      title,
+      originalText,
+      category: 'Manual',
+      source: source || documentPreview.documentName,
+      proposedChecks: ['Inspect relevant repository implementation'],
+      status: 'NOT_TESTED' as const,
+    };
+
+    setExtractionResult((previous) => {
+      const claims = [...(previous?.claims ?? []), newClaim];
+
+      return {
+        documentName: documentPreview.documentName,
+        documentType: documentPreview.documentType,
+        pageOrSlideCount: documentPreview.pageOrSlideCount,
+        totalClaims: claims.length,
+        explanation:
+          'Claims were manually entered by the reviewer. They have not been automatically verified.',
+        claims,
+      };
+    });
+
+    setSelectedClaimIds((previous) => new Set([...previous, id]));
+
+    setManualClaimTitle('');
+    setManualClaimText('');
+    setManualClaimSource('');
+    setManualClaimError('');
   };
 
   // Toggle single claim selection
@@ -303,6 +391,82 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
               </div>
             )}
           </div>
+
+          {/* Document preview when AI extraction is unavailable */}
+          {documentPreview && (
+            <div className="p-5 rounded-2xl bg-brand-surface/70 border border-amber-500/30 space-y-4">
+              <h3 className="text-base font-bold text-white">
+                Document Text Preview
+              </h3>
+
+              <p className="text-xs text-amber-300">
+                {fallbackNotice}
+              </p>
+
+              <p className="text-xs text-slate-400">
+                {documentPreview.documentName}
+                {' | '}
+                {documentPreview.pageOrSlideCount ?? 'Unknown'} pages/slides
+              </p>
+
+              <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 p-4">
+                <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-300 font-sans">
+                  {documentPreview.text}
+                </pre>
+              </div>
+
+
+              <div className="space-y-3 pt-4 border-t border-slate-700">
+                <h4 className="text-sm font-bold text-white">
+                  Create a Technical Claim
+                </h4>
+
+                <p className="text-xs text-slate-400">
+                  Review the document above and enter a specific implementation
+                  claim to compare against the GitHub repository.
+                </p>
+
+                <input
+                  type="text"
+                  value={manualClaimTitle}
+                  onChange={(e) => setManualClaimTitle(e.target.value)}
+                  placeholder="Claim title (e.g. GitHub repository analysis)"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white placeholder-slate-500"
+                />
+
+                <textarea
+                  value={manualClaimText}
+                  onChange={(e) => setManualClaimText(e.target.value)}
+                  placeholder="Describe the claimed feature or behavior..."
+                  rows={3}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white placeholder-slate-500"
+                />
+
+                <input
+                  type="text"
+                  value={manualClaimSource}
+                  onChange={(e) => setManualClaimSource(e.target.value)}
+                  placeholder="Source (e.g. Slide 6)"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm text-white placeholder-slate-500"
+                />
+
+                {manualClaimError && (
+                  <p className="text-xs text-rose-300">
+                    {manualClaimError}
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleAddManualClaim}
+                  className="rounded-xl bg-cyan-500 px-5 py-2.5 text-sm font-bold text-slate-950 hover:bg-cyan-400"
+                >
+                  + Add Claim for Verification
+                </button>
+              </div>
+
+            </div>
+          )}
 
           {/* Section 3: Extracted Claims Feed */}
           {extractionResult && (

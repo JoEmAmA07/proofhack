@@ -15,6 +15,37 @@ import {
 // Maximum candidate source files fetched for deep code analysis (keeps rate-limit & latency low)
 const MAX_ANALYZED_FILES = 15;
 
+const CLAIM_STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'this', 'that',
+  'have', 'has', 'using', 'uses', 'used', 'into',
+  'application', 'project', 'system', 'feature',
+  'supports', 'support', 'implementation',
+  'implement', 'check', 'inspect', 'verify',
+  'code', 'source', 'function', 'functions',
+]);
+
+function getClaimSearchTerms(claims: Claim[]): string[] {
+  const terms = new Set<string>();
+
+  for (const claim of claims) {
+    const text = [
+      claim.title,
+      claim.originalText,
+      claim.category,
+      ...(claim.proposedChecks || []),
+    ].join(' ').toLowerCase();
+
+    for (const word of text.match(/[a-z][a-z0-9_-]*/g) || []) {
+      if (word.length >= 4 && !CLAIM_STOP_WORDS.has(word)) {
+        terms.add(word);
+      }
+    }
+  }
+
+  return [...terms];
+}
+
+
 interface CachedAnalysis {
   timestamp: number;
   metadata: RepoMetadata;
@@ -122,14 +153,66 @@ export class RepositoryService {
    * Matches technical claims against analyzed repository files.
    */
   public async matchClaims(rawUrl: string, claims: Claim[]): Promise<MatchClaimsResult> {
-    const { analysis, analyzedFiles } = await this.analyzeRepository(rawUrl);
+
+    const { analysis, analyzedFiles: baselineFiles } =
+      await this.analyzeRepository(rawUrl);
+
+    const { owner, repo } = validateAndParseGitHubUrl(rawUrl);
+
+    const tree = await githubClient.getFileTree(
+      owner,
+      repo,
+      analysis.metadata.headCommitSha
+    );
+
+    const selectedPaths = this.selectClaimAwareFiles(tree, claims);
+
+    const baselineByPath = new Map(
+      baselineFiles.map((file) => [file.path, file])
+    );
+
+    const analyzedFiles: AnalyzedFile[] = [];
+
+    for (const path of selectedPaths) {
+      const existing = baselineByPath.get(path);
+
+      if (existing) {
+        analyzedFiles.push(existing);
+        continue;
+      }
+
+      const content = await githubClient.getFileContent(
+        owner,
+        repo,
+        path,
+        analysis.metadata.headCommitSha
+      );
+
+      if (content !== null) {
+        analyzedFiles.push(CodeAnalyzer.analyze(path, content));
+      }
+    }
+
+    const claimAwarePartialScan =
+      tree.filter((entry) => {
+        if (entry.type !== 'blob') return false;
+
+        const lower = entry.path.toLowerCase();
+        const extension = lower.split('.').pop() || '';
+
+        return [
+          'ts', 'tsx', 'js', 'jsx',
+          'py', 'go', 'rs', 'java', 'rb', 'php',
+        ].includes(extension);
+      }).length > analyzedFiles.length;
+
 
     const matches = ClaimMatcher.matchClaims(
       claims,
       analysis.metadata,
       analysis.dependencies,
       analyzedFiles,
-      analysis.isPartialScan
+      claimAwarePartialScan
     );
 
     const summary = {
@@ -148,6 +231,128 @@ export class RepositoryService {
   }
 
   /**
+   * Selects candidate source files using claim terminology.
+   * Filename relevance is only a discovery hint,
+   * not evidence that the feature is implemented.
+   */
+  private selectClaimAwareFiles(
+    entries: FileTreeEntry[],
+    claims: Claim[]
+  ): string[] {
+    const baseline = this.selectKeySourceFiles(entries);
+    const terms = getClaimSearchTerms(claims);
+
+    const sourceExtensions = new Set([
+      'ts', 'tsx', 'js', 'jsx', 'py',
+      'go', 'rs', 'java', 'rb', 'php',
+    ]);
+
+    const excludedSegments = new Set([
+      'node_modules', 'vendor', 'dist', 'build',
+      '.git', 'coverage', 'test', 'tests',
+      '__tests__', 'example', 'examples',
+      'demo', 'demos', 'sample', 'samples',
+      'fixture', 'fixtures', 'doc', 'docs',
+    ]);
+
+    const candidates = entries
+      .filter((entry) => {
+        if (entry.type !== 'blob') return false;
+
+        const path = entry.path.toLowerCase();
+        const segments = path.split('/');
+        const extension = path.split('.').pop() || '';
+
+        if (!sourceExtensions.has(extension)) return false;
+
+        if (segments.some((segment) => excludedSegments.has(segment))) {
+          return false;
+        }
+
+        if (
+          path.includes('.spec.') ||
+          path.includes('.test.') ||
+          path.endsWith('.min.js') ||
+          path.endsWith('bundle.js')
+        ) {
+          return false;
+        }
+
+        return true;
+      })
+      .map((entry) => {
+        const path = entry.path;
+        const lower = path.toLowerCase();
+
+        const filename = lower.split('/').pop() || '';
+        const filenameTokens = filename
+          .replace(/\.[^.]+$/, '')
+          .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+          .split(/[^a-z0-9]+/);
+
+        let relevance = 0;
+
+        for (const term of terms) {
+          if (filenameTokens.includes(term)) {
+            relevance += 50;
+          } else if (lower.includes(term)) {
+            relevance += 15;
+          }
+        }
+
+        if (baseline.includes(path)) {
+          relevance += 10;
+        }
+
+        return { path, relevance };
+      });
+
+    candidates.sort(
+      (a, b) =>
+        b.relevance - a.relevance ||
+        a.path.localeCompare(b.path)
+    );
+
+
+    // Combine claim-relevant files with baseline implementation files.
+    // A weak filename match must not discard core application files.
+    const claimRelevant = candidates
+      .filter((candidate) => candidate.relevance > 10)
+      .map((candidate) => candidate.path);
+
+    const selected: string[] = [];
+    const seen = new Set<string>();
+
+    const addFile = (path: string) => {
+      if (
+        !seen.has(path) &&
+        selected.length < MAX_ANALYZED_FILES
+      ) {
+        selected.push(path);
+        seen.add(path);
+      }
+    };
+
+    // Reserve up to 7 slots for important baseline files.
+    for (const path of baseline.slice(0, 7)) {
+      addFile(path);
+    }
+
+    // Use remaining slots for claim-relevant files.
+    for (const path of claimRelevant) {
+      addFile(path);
+    }
+
+    // Fill any remaining capacity with baseline files.
+    for (const path of baseline) {
+      addFile(path);
+    }
+
+    return selected;
+
+  }
+
+  /**
    * Selects up to MAX_ANALYZED_FILES priority source files to analyze.
    * Prioritizes routes, controllers, middleware, models, server entrypoints, and core services.
    */
@@ -156,10 +361,32 @@ export class RepositoryService {
       'ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'rb', 'php'
     ]);
 
+
     const EXCLUDED_PATTERNS = [
-      'node_modules/', 'vendor/', 'dist/', 'build/', '.git/',
-      'test/', 'tests/', '__tests__/', '.spec.', '.test.', 'min.js', 'bundle.js'
+      'node_modules/',
+      'vendor/',
+      'dist/',
+      'build/',
+      '.git/',
+      'coverage/',
+      'test/',
+      'tests/',
+      '__tests__/',
+      '.spec.',
+      '.test.',
+      '.min.js',
+      'bundle.js',
+      'examples/',
+      'example/',
+      'demos/',
+      'demo/',
+      'samples/',
+      'sample/',
+      'fixtures/',
+      'docs/',
+      'doc/',
     ];
+
 
     const eligible = entries
       .filter((e) => {

@@ -45,7 +45,8 @@ export type EvidenceKind =
   | 'route'
   | 'schema'
   | 'config'
-  | 'text_match';
+  | 'text_match'
+  | 'function_call';
 
 export interface CodeEvidenceSnippet {
   filePath: string;
@@ -75,6 +76,11 @@ export interface ClaimEvidenceMatch {
   evidenceSnippets: CodeEvidenceSnippet[];
   confidenceScore: number; // 0 - 100
 }
+export interface FunctionCall {
+  caller: string;
+  callee: string;
+  line: number;
+}
 
 export interface AnalyzedFile {
   path: string;
@@ -85,7 +91,9 @@ export interface AnalyzedFile {
   functions: Array<{ name: string; lineStart: number; lineEnd: number }>;
   classes: Array<{ name: string; lineStart: number; lineEnd: number }>;
   routes: Array<{ method: string; path: string; lineStart: number; lineEnd: number }>;
+  calls?: FunctionCall[];
 }
+
 
 export interface RepoAnalysisResult {
   metadata: RepoMetadata;

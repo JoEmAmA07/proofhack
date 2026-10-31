@@ -123,4 +123,72 @@ claimsRouter.post(
     }
   }
 );
+/**
+ * POST /api/claims/preview
+ * Extracts readable document text without requiring Gemini.
+ */
+claimsRouter.post(
+  '/preview',
+  (req: Request, res: Response, next) => {
+    upload.single('document')(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({
+          success: false,
+          error: 'File Upload Error',
+          message: err.message,
+        });
+      }
+
+      if (err instanceof Error) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid File',
+          message: err.message,
+        });
+      }
+
+      next();
+    });
+  },
+  async (req: Request, res: Response) => {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing File',
+        message: 'Please upload a document.',
+      });
+    }
+
+    try {
+      const parsed = await parseDocument(
+        req.file.buffer,
+        req.file.originalname
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          documentName: req.file.originalname,
+          documentType: parsed.documentType,
+          pageOrSlideCount: parsed.pageOrSlideCount,
+          text: parsed.text,
+        },
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof DocumentParseError
+          ? err.message
+          : 'Unable to process the uploaded document.';
+
+      return res.status(
+        err instanceof DocumentParseError ? 400 : 500
+      ).json({
+        success: false,
+        error: 'Document Preview Error',
+        message,
+      });
+    }
+  }
+);
+
 

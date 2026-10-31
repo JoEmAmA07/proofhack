@@ -60,3 +60,56 @@ export async function uploadAndExtractClaims(
   }
 }
 
+
+export interface DocumentPreview {
+  documentName: string;
+  documentType: 'markdown' | 'text' | 'pdf' | 'pptx';
+  pageOrSlideCount?: number;
+  text: string;
+}
+
+export async function uploadAndPreviewDocument(
+  file: File
+): Promise<{
+  success: boolean;
+  data?: DocumentPreview;
+  error?: string;
+}> {
+  try {
+    const formData = new FormData();
+    formData.append('document', file);
+
+    const apiBase = import.meta.env.VITE_API_URL || '/api';
+
+    const response = await fetch(`${apiBase}/claims/preview`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success || !result.data) {
+      return {
+        success: false,
+        error:
+          result.message ||
+          result.error ||
+          `Document preview failed (HTTP ${response.status})`,
+      };
+    }
+
+    return {
+      success: true,
+      data: result.data as DocumentPreview,
+    };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Unable to preview the uploaded document.',
+    };
+  }
+}
+

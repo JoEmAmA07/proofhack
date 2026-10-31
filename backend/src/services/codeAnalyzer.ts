@@ -1,5 +1,6 @@
 import ts from 'typescript';
-import { AnalyzedFile } from '../types/repository.js';
+import { AnalyzedFile, FunctionCall } from '../types/repository.js';
+
 
 /**
  * Deterministic code analyzer that parses source files.
@@ -58,6 +59,8 @@ export class CodeAnalyzer {
     const functions: Array<{ name: string; lineStart: number; lineEnd: number }> = [];
     const classes: Array<{ name: string; lineStart: number; lineEnd: number }> = [];
     const routes: Array<{ method: string; path: string; lineStart: number; lineEnd: number }> = [];
+    const calls: FunctionCall[] = [];
+
 
     const getLines = (node: ts.Node) => {
       const start = sourceFile.getLineAndCharacterOfPosition(node.getStart());
@@ -115,6 +118,43 @@ export class CodeAnalyzer {
         }
       }
 
+      // Detect functions assigned to object properties:
+      // app.route = function route(path) {}
+      // app[method] = function(path) {}
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        (
+          ts.isPropertyAccessExpression(node.left) ||
+          ts.isElementAccessExpression(node.left)
+        ) &&
+        (
+          ts.isFunctionExpression(node.right) ||
+          ts.isArrowFunction(node.right)
+        )
+      ) {
+        const { lineStart, lineEnd } = getLines(node);
+
+        const assignedName = node.left.getText(sourceFile);
+
+        functions.push({
+          name: assignedName,
+          lineStart,
+          lineEnd,
+        });
+      }
+
+      // Detect methods inside classes and object literals.
+      if (ts.isMethodDeclaration(node)) {
+        const { lineStart, lineEnd } = getLines(node);
+
+        functions.push({
+          name: node.name.getText(sourceFile),
+          lineStart,
+          lineEnd,
+        });
+      }
+
       // 3. Class Declarations
       if (ts.isClassDeclaration(node) && node.name) {
         const { lineStart, lineEnd } = getLines(node);
@@ -149,6 +189,117 @@ export class CodeAnalyzer {
         }
       }
 
+      // Extract static function-call relationships.
+      // This does NOT prove that the calls execute at runtime.
+      if (ts.isCallExpression(node)) {
+        let parent: ts.Node | undefined = node.parent;
+        let caller = '';
+
+        while (parent) {
+
+          // A named function expression is its own caller scope.
+          // Stop here rather than attributing its calls to an outer function.
+
+          if (ts.isFunctionExpression(parent)) {
+            const owner = parent.parent;
+
+            if (
+              ts.isBinaryExpression(owner) &&
+              owner.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+              owner.right === parent
+            ) {
+              caller = owner.left.getText(sourceFile);
+            } else if (
+              ts.isVariableDeclaration(owner) &&
+              ts.isIdentifier(owner.name) &&
+              owner.initializer === parent
+            ) {
+              caller = owner.name.text;
+            } else {
+              caller = parent.name?.text ?? '';
+            }
+
+            break;
+          }
+
+
+          // An unnamed arrow function or callback has no reliable
+          // caller name yet, so do not attribute its calls to the outer function.
+
+          if (ts.isArrowFunction(parent)) {
+            const owner = parent.parent;
+
+            if (
+              ts.isVariableDeclaration(owner) &&
+              ts.isIdentifier(owner.name) &&
+              owner.initializer === parent
+            ) {
+              caller = owner.name.text;
+            } else if (
+              ts.isBinaryExpression(owner) &&
+              owner.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+              owner.right === parent
+            ) {
+              caller = owner.left.getText(sourceFile);
+            } else {
+              // Anonymous callbacks have no reliable caller name.
+              caller = '';
+            }
+
+            break;
+          }
+
+
+          if (
+            ts.isBinaryExpression(parent) &&
+            parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+            (
+              ts.isFunctionExpression(parent.right) ||
+              ts.isArrowFunction(parent.right)
+            )
+          ) {
+            caller = parent.left.getText(sourceFile);
+            break;
+          }
+
+          if (ts.isFunctionDeclaration(parent) && parent.name) {
+            caller = parent.name.text;
+            break;
+          }
+
+          if (ts.isMethodDeclaration(parent)) {
+            caller = parent.name.getText(sourceFile);
+            break;
+          }
+
+          if (
+            ts.isVariableDeclaration(parent) &&
+            ts.isIdentifier(parent.name) &&
+            parent.initializer &&
+            (
+              ts.isArrowFunction(parent.initializer) ||
+              ts.isFunctionExpression(parent.initializer)
+            )
+          ) {
+            caller = parent.name.text;
+            break;
+          }
+
+          parent = parent.parent;
+        }
+
+        if (caller) {
+          const callee = node.expression.getText(sourceFile);
+          const { lineStart } = getLines(node);
+
+          calls.push({
+            caller,
+            callee,
+            line: lineStart,
+          });
+        }
+      }
+
       ts.forEachChild(node, visit);
     };
 
@@ -163,6 +314,7 @@ export class CodeAnalyzer {
       functions,
       classes,
       routes,
+      calls,
     };
   }
 
