@@ -17,6 +17,7 @@ import { HealthResponse } from '../api/health';
 import { ExtractionResult, uploadAndExtractClaims } from '../api/claims';
 import { DocumentUploadZone } from './DocumentUploadZone';
 import { ClaimCard } from './ClaimCard';
+import { RepositoryAnalyzer } from './RepositoryAnalyzer';
 
 interface DashboardPlaceholderProps {
   onBackToLanding: () => void;
@@ -64,6 +65,64 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
   };
 
   // Toggle single claim selection
+
+  // Demo fallback: sample claims for testing GitHub verification.
+  // These are NOT extracted from the uploaded document.
+  const handleLoadDemoClaims = () => {
+    const demoClaims = [
+      {
+        id: 'demo-1',
+        title: 'HTTP API routing',
+        originalText: 'The project implements HTTP GET and POST routing.',
+        category: 'API',
+        source: 'DEMO DATA — not extracted from document',
+        proposedChecks: ['Inspect HTTP routes', 'Check router implementation'],
+        status: 'NOT_TESTED' as const,
+      },
+      {
+        id: 'demo-2',
+        title: 'Middleware support',
+        originalText: 'The project supports middleware functions for handling requests.',
+        category: 'Backend',
+        source: 'DEMO DATA — not extracted from document',
+        proposedChecks: ['Inspect middleware functions'],
+        status: 'NOT_TESTED' as const,
+      },
+      {
+        id: 'demo-3',
+        title: 'HTTP request and response handling',
+        originalText: 'The project implements HTTP request and response handling.',
+        category: 'Backend',
+        source: 'DEMO DATA — not extracted from document',
+        proposedChecks: ['Inspect request handlers', 'Inspect response handlers'],
+        status: 'NOT_TESTED' as const,
+      },
+      {
+        id: 'demo-4',
+        title: 'Express Router support',
+        originalText: 'The project uses Express Router to organize routes.',
+        category: 'API',
+        source: 'DEMO DATA — not extracted from document',
+        proposedChecks: ['Inspect router imports', 'Inspect route registration'],
+        status: 'NOT_TESTED' as const,
+      },
+    ];
+
+    setExtractionResult({
+      documentName: 'DEMO — Express.js Sample Claims',
+      documentType: 'markdown',
+      totalClaims: demoClaims.length,
+      explanation:
+        'Demo Mode: these are predefined sample claims, not AI-extracted claims from the uploaded document.',
+      claims: demoClaims,
+    });
+
+    setSelectedClaimIds(new Set(demoClaims.map((claim) => claim.id)));
+    setExtractionError(null);
+    setSearchQuery('');
+    setSelectedCategory('ALL');
+  };
+
   const handleToggleSelect = (id: string) => {
     setSelectedClaimIds((prev) => {
       const next = new Set(prev);
@@ -88,6 +147,9 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
 
   // Filtered claims
   const claims = extractionResult?.claims || [];
+  const claimsForVerification = claims.filter((claim) =>
+    selectedClaimIds.has(claim.id)
+  );
   const categories = ['ALL', ...Array.from(new Set(claims.map((c) => c.category)))];
 
   const filteredClaims = claims.filter((claim) => {
@@ -148,10 +210,10 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
 
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
-        
+
         {/* Left 2 Cols: Document Upload & Claims Feed */}
         <div className="lg:col-span-2 space-y-8">
-          
+
           {/* Section 1: Target Repository (Preserved for future Phase 3 verification) */}
           <div className="p-5 rounded-2xl bg-brand-surface/70 border border-brand-border/70">
             <label className="block text-sm font-semibold text-white mb-2 flex items-center gap-2">
@@ -187,6 +249,27 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
               setSelectedFile={setSelectedFile}
               error={extractionError}
             />
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-950/20 p-3">
+              <div>
+                <p className="text-xs font-semibold text-amber-200">
+                  Gemini unavailable? Test with Demo Mode
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Loads predefined Express.js claims. No Gemini API call required.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleLoadDemoClaims}
+                disabled={isExtracting}
+                className="px-4 py-2 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 hover:bg-amber-500/25 disabled:opacity-50 text-xs font-semibold cursor-pointer"
+              >
+                Load Sample Claims
+              </button>
+            </div>
+
 
             {/* Helpful setup notice if GEMINI_API_KEY is missing */}
             {isMissingApiKey && (
@@ -224,7 +307,7 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
           {/* Section 3: Extracted Claims Feed */}
           {extractionResult && (
             <div className="space-y-5">
-              
+
               {/* Claims Header & Selection Controls */}
               <div className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
@@ -282,11 +365,10 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
                       <button
                         key={cat}
                         onClick={() => setSelectedCategory(cat)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                          selectedCategory === cat
-                            ? 'bg-cyan-500 text-slate-950 font-bold'
-                            : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-white'
-                        }`}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium whitespace-nowrap transition-colors cursor-pointer ${selectedCategory === cat
+                          ? 'bg-cyan-500 text-slate-950 font-bold'
+                          : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-white'
+                          }`}
                       >
                         {cat}
                       </button>
@@ -326,12 +408,16 @@ export const DashboardPlaceholder: React.FC<DashboardPlaceholderProps> = ({
 
             </div>
           )}
-
+          {/* Phase 3: GitHub Repository Analysis */}
+          <RepositoryAnalyzer
+            repoUrl={repoUrl}
+            selectedClaims={claimsForVerification}
+          />
         </div>
 
         {/* Right 1 Col: Phase Roadmap & Architecture Status */}
         <div className="space-y-6">
-          
+
           <div className="p-5 rounded-2xl bg-brand-surface/70 border border-brand-border/70 space-y-4">
             <h2 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
               <Layers className="w-4 h-4 text-cyan-400" />

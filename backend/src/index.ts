@@ -3,6 +3,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { healthRouter } from './routes/health.js';
 import { claimsRouter } from './routes/claims.js';
+import { repositoryRouter } from './routes/repository.js';
 import { ENV } from './config/env.js';
 
 const app = express();
@@ -12,7 +13,13 @@ const CLIENT_URL = ENV.CLIENT_URL;
 // Middleware
 app.use(
   cors({
-    origin: [CLIENT_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: [
+      CLIENT_URL,
+      ...Array.from({ length: 8 }, (_, i) => [
+        `http://localhost:${5173 + i}`,
+        `http://127.0.0.1:${5173 + i}`,
+      ]).flat(),
+    ],
     credentials: true,
   })
 );
@@ -38,6 +45,7 @@ app.get('/', (_req: Request, res: Response) => {
 // Routes
 app.use('/api/health', healthRouter);
 app.use('/api/claims', claimsRouter);
+app.use('/api/repository', repositoryRouter);
 
 // Fallback 404 handler for undefined API routes
 app.use('/api/*', (_req: Request, res: Response) => {
