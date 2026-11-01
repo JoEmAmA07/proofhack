@@ -16,7 +16,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#070b12] text-slate-100 bg-grid-pattern">
+    <div className="min-h-screen flex flex-col bg-[#080d18] text-slate-100 bg-grid-pattern">
       <Navbar currentView={currentView} setCurrentView={setCurrentView} />
 
       <main className="flex-1">

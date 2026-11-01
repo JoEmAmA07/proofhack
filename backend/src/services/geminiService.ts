@@ -75,24 +75,42 @@ export function classifyError(err: unknown): SafeErrorDetails {
   const status = (anyErr?.status as number) || (anyErr?.statusCode as number);
 
   // 1. Capacity Exceeded (503 UNAVAILABLE / High Demand, 429 Rate Limit)
+
+  // 1A. Quota exhausted / rate limit (429)
+  // Do not retry automatically.
   if (
-    status === 503 ||
-    rawMsg.includes('503') ||
-    rawMsg.includes('high demand') ||
-    rawMsg.includes('UNAVAILABLE') ||
-    rawMsg.includes('Deadline expired') ||
     status === 429 ||
     rawMsg.includes('429') ||
     rawMsg.includes('RESOURCE_EXHAUSTED')
   ) {
     return {
       category: 'CAPACITY_EXCEEDED',
-      isRetryable: true,
-      httpStatus: 503,
-      code: errCode || 'CAPACITY_EXCEEDED',
-      summary: 'Google Gemini API is currently experiencing a capacity spike (503 Service Unavailable / High Demand).',
+      isRetryable: false,
+      httpStatus: 429,
+      code: 'RESOURCE_EXHAUSTED',
+      summary: 'Gemini API quota or rate limit exceeded. AI extraction is temporarily unavailable. Please use local claim suggestions.',
     };
   }
+
+
+  // 1B. Temporary server overload (503)
+  // Retrying may help.
+  if (
+    status === 503 ||
+    rawMsg.includes('503') ||
+    rawMsg.includes('high demand') ||
+    rawMsg.includes('UNAVAILABLE') ||
+    rawMsg.includes('Deadline expired')
+  ) {
+    return {
+      category: 'CAPACITY_EXCEEDED',
+      isRetryable: true,
+      httpStatus: 503,
+      code: errCode || 'SERVICE_UNAVAILABLE',
+      summary: 'Google Gemini API is temporarily overloaded. Please try again later.',
+    };
+  }
+
 
   // 2. Timeout
   if (
@@ -166,6 +184,7 @@ export function classifyError(err: unknown): SafeErrorDetails {
     };
   }
 
+
   return {
     category: 'UNKNOWN',
     isRetryable: false,
@@ -177,6 +196,7 @@ export function classifyError(err: unknown): SafeErrorDetails {
 
 /**
  * Executes an async task with bounded retries, exponential backoff, jitter,
+ 
  * and a per-attempt timeout for transient failures.
  */
 export async function executeWithRetry<T>(
@@ -251,11 +271,19 @@ export async function executeWithRetry<T>(
   const finalCategory = lastErrorDetails?.category || 'UNKNOWN';
   let userFacingMessage = '';
 
+
   if (finalCategory === 'CAPACITY_EXCEEDED') {
-    userFacingMessage =
-      'Google Gemini API is currently experiencing a temporary capacity spike (503 Service Unavailable / High Demand). ' +
-      `ProofStack completed ${maxAttempts} retry attempts with exponential backoff, but the upstream model remains overloaded. ` +
-      'Capacity spikes are usually temporary; please wait a moment and try again.';
+    if (lastErrorDetails?.httpStatus === 429) {
+      userFacingMessage =
+        'Gemini free-tier quota or rate limit has been reached. ' +
+        'AI claim extraction is temporarily unavailable. ' +
+        'Please use local claim suggestions or try again after your quota resets.';
+    } else {
+      userFacingMessage =
+        'Google Gemini API is temporarily overloaded (503 Service Unavailable). ' +
+        'Please try again later or use local claim suggestions.';
+    }
+
   } else if (finalCategory === 'TRANSIENT_NETWORK' || finalCategory === 'TIMEOUT') {
     const detail = lastErrorDetails?.causeMessage || lastErrorDetails?.code || 'timed out';
     userFacingMessage =
@@ -489,8 +517,8 @@ Remember: Output strictly valid JSON matching the specified schema.`;
       .map((c, index) => {
         const checks = Array.isArray(c.proposedChecks)
           ? c.proposedChecks.filter(
-              (chk): chk is string => typeof chk === 'string' && chk.trim().length > 0
-            )
+            (chk): chk is string => typeof chk === 'string' && chk.trim().length > 0
+          )
           : [];
 
         return {

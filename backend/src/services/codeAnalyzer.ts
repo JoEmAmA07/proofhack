@@ -19,7 +19,11 @@ export class CodeAnalyzer {
       return this.analyzeJsTs(filePath, content, ext, size);
     }
 
-    if (['py', 'go', 'rs', 'java', 'rb', 'php'].includes(ext)) {
+    if (ext === 'java') {
+      return this.analyzeJava(filePath, content, size);
+    }
+
+    if (['py', 'go', 'rs', 'rb', 'php'].includes(ext)) {
       return this.analyzeOtherLanguages(filePath, content, ext, size);
     }
 
@@ -319,6 +323,84 @@ export class CodeAnalyzer {
   }
 
   /**
+   * Best-effort Java structural analysis. This is not a full Java parser.
+   * Strips comments and string contents while retaining line positions.
+   */
+  private static analyzeJava(filePath: string, content: string, size: number): AnalyzedFile {
+    const lines = content.split('\n');
+    const imports: string[] = [];
+    const functions: AnalyzedFile['functions'] = [];
+    const classes: AnalyzedFile['classes'] = [];
+    const routes: AnalyzedFile['routes'] = [];
+    const calls: FunctionCall[] = [];
+
+    // Preserve newlines and character offsets; mask comments, strings, and chars.
+    const masked = content.replace(
+      /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g,
+      (match) => match.replace(/[^\n]/g, ' ')
+    );
+    const cleanLines = masked.split('\n');
+    const starts: number[] = [];
+    let offset = 0;
+    for (const line of cleanLines) {
+      starts.push(offset);
+      offset += line.length + 1;
+    }
+    const lineAt = (pos: number): number => {
+      let low = 0, high = starts.length - 1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (starts[mid] <= pos) low = mid + 1;
+        else high = mid - 1;
+      }
+      return high + 1;
+    };
+    const endOfBlock = (open: number): number => {
+      let depth = 0;
+      for (let i = open; i < masked.length; i++) {
+        if (masked[i] === '{') depth++;
+        else if (masked[i] === '}' && --depth === 0) return lineAt(i);
+      }
+      return lineAt(open);
+    };
+
+    lines.forEach((line) => {
+      const match = line.trim().match(/^import\s+(?:static\s+)?([\w.*]+)\s*;/);
+      if (match) imports.push(match[1]);
+    });
+
+    const classPattern = /\b(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)\b[^;{}]*\{/g;
+    let match: RegExpExecArray | null;
+    while ((match = classPattern.exec(masked))) {
+      const brace = masked.indexOf('{', match.index);
+      classes.push({ name: match[1], lineStart: lineAt(match.index), lineEnd: endOfBlock(brace) });
+    }
+
+    // Method/constructor declarations with a body. Exclude control structures
+    // and invocation expressions; require a declaration-like prefix.
+    const methodPattern = /(?:^|[;{}\n])\s*((?:(?:@[\w.]+(?:\([^\n]*?\))?\s*)|(?:public|private|protected|static|final|abstract|synchronized|native|default|strictfp)\s+)*)(?:<[^{};\n]+>\s*)?([\w.$<>?,\[\]\s]+?)\s+([A-Za-z_$][\w$]*)\s*\(([^{};]*?)\)\s*(?:throws\s+[\w.,\s]+)?\s*\{/g;
+    const excluded = new Set(['if', 'for', 'while', 'switch', 'catch', 'try', 'else', 'do', 'new', 'return', 'throw', 'synchronized']);
+    while ((match = methodPattern.exec(masked))) {
+      const name = match[3];
+      const prefix = match[2].trim();
+      if (excluded.has(name) || excluded.has(prefix.split(/\s+/)[0])) continue;
+      // Require return type or a constructor whose name matches a declared class.
+      const constructor = classes.some((cls) => cls.name === name);
+      if (!prefix && !constructor) continue;
+      const brace = masked.indexOf('{', match.index + match[0].lastIndexOf(')'));
+      if (brace < 0) continue;
+      functions.push({ name, lineStart: lineAt(match.index + match[0].indexOf(name)), lineEnd: endOfBlock(brace) });
+    }
+
+    // Deliberately omit Java calls: without a proper parser, a regex call graph
+    // could misattribute calls to the wrong method and create false evidence.
+    return {
+      path: filePath, language: 'java', size, content,
+      imports: [...new Set(imports)], functions, classes, routes, calls
+    };
+  }
+
+  /**
    * Conservative line-by-line regex extraction for Python, Go, Rust, Java.
    */
   private static analyzeOtherLanguages(
@@ -343,8 +425,8 @@ export class CodeAnalyzer {
           const mod = trimmed.split(/\s+/)[1];
           if (mod) imports.push(mod.replace(/[,;]/g, ''));
         }
-        if (trimmed.startsWith('def ')) {
-          const fnName = trimmed.match(/^def\s+([a-zA-Z0-9_]+)/)?.[1];
+        if (/^(?:async\s+)?def\s+/.test(trimmed)) {
+          const fnName = trimmed.match(/^(?:async\s+)?def\s+([a-zA-Z0-9_]+)/)?.[1];
           if (fnName) functions.push({ name: fnName, lineStart: lineNum, lineEnd: lineNum + 5 });
         }
         if (trimmed.startsWith('class ')) {
@@ -372,8 +454,8 @@ export class CodeAnalyzer {
 
       // Rust
       if (ext === 'rs') {
-        if (trimmed.startsWith('pub fn ') || trimmed.startsWith('fn ')) {
-          const fnName = trimmed.match(/^fn\s+([a-zA-Z0-9_]+)/)?.[1];
+        if (/^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+/.test(trimmed)) {
+          const fnName = trimmed.match(/^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)/)?.[1];
           if (fnName) functions.push({ name: fnName, lineStart: lineNum, lineEnd: lineNum + 5 });
         }
       }

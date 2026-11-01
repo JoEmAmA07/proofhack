@@ -61,12 +61,15 @@ export async function uploadAndExtractClaims(
 }
 
 
+
 export interface DocumentPreview {
   documentName: string;
   documentType: 'markdown' | 'text' | 'pdf' | 'pptx';
   pageOrSlideCount?: number;
   text: string;
+  suggestedClaims?: Claim[];
 }
+
 
 export async function uploadAndPreviewDocument(
   file: File
